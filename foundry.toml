@@ -1,0 +1,15 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+
+[fmt]
+number_underscore = "remove"
+line_length = 4096
+single_line_statement_blocks = "preserve"
+
+[lint]
+exclude_lints = [
+    "unaliased-plain-import",
+    "screaming-snake-case-immutable",
+]
