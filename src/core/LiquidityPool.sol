@@ -251,6 +251,7 @@ contract LiquidityPool is ERC20, Ownable, ReentrancyGuard {
     function setFeeBps(uint256 newFeeBps) external {
         require(msg.sender == dao, "OnlyDAO");
         require(newFeeBps >= 1 && newFeeBps <= 1000, "InvalidFee");
+        require(newFeeBps != feeBps, "Fee is the same");
 
         uint256 oldFeeBps = feeBps;
         feeBps = newFeeBps;

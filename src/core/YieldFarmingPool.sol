@@ -76,7 +76,8 @@ contract YieldFarmingPool is ReentrancyGuard, Ownable {
     constructor(address lpToken_, address govToken_, uint256 initialRewardRate, address initialOwner) Ownable(initialOwner) {
         require(lpToken_ != address(0), "ZeroAddress");
         require(govToken_ != address(0), "ZeroAddress");
-        require(initialOwner != address(0), "ZeroAddress");
+        require(initialOwner != address(0), "ZeroAddress"); 
+        require(initialRewardRate > 0, "ZeroRate");
         lpToken = lpToken_;
         govToken = govToken_;
         rewardRate = initialRewardRate;
@@ -86,7 +87,14 @@ contract YieldFarmingPool is ReentrancyGuard, Ownable {
     /// @notice Sets the DAO address that governs this pool's reward rate.
     /// @dev Callable once by the owner during ecosystem setup. Emits DAOSet.
     /// @param dao_ Address of the DAO contract. Cannot be address(0).
-    function setDAO(address dao_) external onlyOwner {}
+    function setDAO(address dao_) external onlyOwner {
+        require(dao_ != address(0), "ZeroAddress");
+        require(dao == address(0), "DAOAlreadySet");
+
+        dao = dao_;
+
+        emit DAOSet(dao_);
+    }
 
     /// @notice Stakes `amount` LP tokens and begins accruing GovernanceToken rewards.
     /// @dev Operation order (invariant — must not change):
@@ -97,7 +105,18 @@ contract YieldFarmingPool is ReentrancyGuard, Ownable {
     ///      5. IERC20(lpToken).safeTransferFrom(msg.sender, address(this), amount)
     ///      6. emit Staked
     /// @param amount Amount of LP tokens to stake. Must be greater than zero.
-    function stake(uint256 amount) external nonReentrant {}
+    function stake(uint256 amount) external nonReentrant {
+        require(amount > 0, "ZeroAmount");
+        
+        _updateReward(msg.sender);
+
+        balances[msg.sender] += amount;
+        totalStaked += amount;
+
+        IERC20(lpToken).safeTransferFrom(msg.sender, address(this), amount);
+
+        emit Staked(msg.sender, amount);
+    }
 
     /// @notice Withdraws `amount` staked LP tokens back to the caller.
     /// @dev Operation order (invariant — must not change):
@@ -109,17 +128,58 @@ contract YieldFarmingPool is ReentrancyGuard, Ownable {
     ///      6. emit Unstaked
     ///      Does NOT harvest rewards; call harvest() separately or use exit().
     /// @param amount Amount of LP tokens to withdraw. Must not exceed balances[msg.sender].
-    function unstake(uint256 amount) external nonReentrant {}
+    function unstake(uint256 amount) external nonReentrant {
+        require(amount > 0, "ZeroAmount");
+        require(balances[msg.sender] >= amount, "InsufficientStake");
+
+        _updateReward(msg.sender);
+
+        balances[msg.sender] -= amount;
+        totalStaked -= amount;
+
+        IERC20(lpToken).safeTransfer(msg.sender, amount);
+
+        emit Unstaked(msg.sender, amount);
+    }
 
     /// @notice Claims all pending GovernanceToken rewards for the caller.
     /// @dev CEI: rewards[msg.sender] is zeroed BEFORE the external mint/transfer call to prevent
     ///      reentrancy-based double-claim. Reverts with "NoRewards" if pending balance is zero.
-    function harvest() external nonReentrant {}
+    function harvest() external nonReentrant {
+        _updateReward(msg.sender);
+        require(rewards[msg.sender] > 0, "NoRewards");
+
+        uint256 reward = rewards[msg.sender];
+        rewards[msg.sender] = 0;
+
+        IERC20(govToken).safeTransfer(msg.sender, reward);
+
+        emit RewardHarvested(msg.sender, reward);
+    }
 
     /// @notice Withdraws all staked LP tokens and claims all pending rewards in one transaction.
     /// @dev Internally reuses unstake + harvest logic without redundant external calls.
     ///      Equivalent to unstake(balances[msg.sender]) followed by harvest().
-    function exit() external nonReentrant {}
+    function exit() external nonReentrant {
+        require(balances[msg.sender] > 0, "ZeroLPToken");
+        _updateReward(msg.sender);
+
+        uint256 userBalance = balances[msg.sender];
+        uint256 userRewards = rewards[msg.sender];
+
+        balances[msg.sender] = 0;
+        rewards[msg.sender] = 0;
+        totalStaked -= userBalance;
+
+        IERC20(lpToken).safeTransfer(msg.sender, userBalance);
+        
+        if(userRewards > 0) {
+            IERC20(govToken).safeTransfer(msg.sender, userRewards);
+            emit RewardHarvested(msg.sender, userRewards);
+        }
+
+        emit Unstaked(msg.sender, userBalance);
+    }
 
     /// @notice Returns the total pending rewards (accrued + uncheckpointed) for a user.
     /// @dev Formula: rewards[user] + balances[user] * (rewardPerToken() - userRewardPerTokenPaid[user]) / 1e18.
