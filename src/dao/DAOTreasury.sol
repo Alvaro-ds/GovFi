@@ -10,7 +10,7 @@ import "../../lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.s
 /// @notice Custodian of protocol fees (ETH and ERC20 tokens). Only the DAO may initiate withdrawals.
 /// @dev Separation of concerns: the DAO decides, the Treasury executes.
 ///      Bootstrap sequence: deploy with address(0), then call setDAO after the DAO is deployed.
-///      Owner should renounce ownership post-setup so only the DAO can act.
+///      setDAO transfers ownership to the DAO so it self-governs post-setup.
 contract DAOTreasury is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -53,7 +53,7 @@ contract DAOTreasury is Ownable2Step, ReentrancyGuard {
 
     /// @notice Sets the DAO that governs treasury withdrawals. Single-use: reverts if already set.
     /// @dev Only callable by the owner. Reverts if dao != address(0) to prevent silent replacement.
-    ///      In production, the owner should renounce ownership immediately after this call.
+    ///      Immediately transfers contract ownership to the DAO so no external owner remains.
     /// @param newDAO New DAO contract address. Cannot be address(0).
     function setDAO(address newDAO) external onlyOwner {
         require(newDAO != address(0), "ZeroAddress");
@@ -61,12 +61,13 @@ contract DAOTreasury is Ownable2Step, ReentrancyGuard {
 
         address oldDAO = dao;
         dao = newDAO;
+        _transferOwnership(newDAO);
 
         emit DAOSet(oldDAO, newDAO);
     }
 
     /// @notice Transfers ETH from the treasury to `to`. Only callable by the DAO.
-    /// @dev CEI + nonReentrant. Emits TreasuryAction before the low-level call.
+    /// @dev CEI + nonReentrant. Emits TreasuryAction after successful transfer.
     ///      Low-level call is used to support smart-contract recipients with custom receive() logic.
     /// @param to Recipient address. Cannot be address(0).
     /// @param amount ETH to transfer in wei. Must be > 0 and <= address(this).balance.
@@ -78,10 +79,10 @@ contract DAOTreasury is Ownable2Step, ReentrancyGuard {
         require(address(this).balance >= amount, "InsufficientETH");
         require(bytes(reason).length > 0, "InvalidReason");
 
-        emit TreasuryAction(address(0), to, amount, reason);
-
         (bool success,) = to.call{value: amount}("");
         require(success, "ETHTransferFailed");
+
+        emit TreasuryAction(address(0), to, amount, reason);
     }
 
     /// @notice Transfers ERC20 tokens from the treasury to `to`. Only callable by the DAO.
@@ -99,9 +100,9 @@ contract DAOTreasury is Ownable2Step, ReentrancyGuard {
         require(IERC20(token).balanceOf(address(this)) >= amount, "InsufficientTokenBalance");
         require(bytes(reason).length > 0, "InvalidReason");
 
-        emit TreasuryAction(token, to, amount, reason);
-
         IERC20(token).safeTransfer(to, amount);
+
+        emit TreasuryAction(token, to, amount, reason);
     }
 
     /// @notice Returns the current ETH balance held by the treasury.
