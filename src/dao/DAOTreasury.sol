@@ -61,7 +61,7 @@ contract DAOTreasury is Ownable2Step, ReentrancyGuard {
 
         address oldDAO = dao;
         dao = newDAO;
-        _transferOwnership(newDAO);
+        _transferOwnership(dao);
 
         emit DAOSet(oldDAO, newDAO);
     }
