@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.33;
 
 /// @title IDAOTreasury
 /// @notice Interface for the GovFi treasury; used by the DAO when executing withdrawal proposals.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.33;
 
-import "../../lib/openzeppelin-contracts/contracts/access/Ownable.sol";
+import "../../lib/openzeppelin-contracts/contracts/access/Ownable2Step.sol";
 import "../../lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 import "../../lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import "../../lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -11,7 +11,7 @@ import "../../lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.s
 /// @dev Separation of concerns: the DAO decides, the Treasury executes.
 ///      Bootstrap sequence: deploy with address(0), then call setDAO after the DAO is deployed.
 ///      Owner should renounce ownership post-setup so only the DAO can act.
-contract DAOTreasury is Ownable, ReentrancyGuard {
+contract DAOTreasury is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @notice Address of the DAO authorized to initiate all treasury withdrawals.
@@ -46,31 +46,27 @@ contract DAOTreasury is Ownable, ReentrancyGuard {
     }
 
     /// @notice Accepts incoming ETH (swap fees forwarded by LiquidityPool, protocol donations).
-    /// @dev Should emit ETHReceived so off-chain monitoring can track all incoming funds.
-    receive() external payable {}
+    /// @dev Emits ETHReceived so off-chain monitoring can track all incoming funds.
+    receive() external payable {
+        emit ETHReceived(msg.sender, msg.value);
+    }
 
-    /// @notice Sets or replaces the DAO that governs treasury withdrawals.
-    /// @dev Only callable by the owner. Restrict to a single call (revert if dao != address(0))
-    ///      to prevent the owner from silently replacing the DAO after the ecosystem is live.
+    /// @notice Sets the DAO that governs treasury withdrawals. Single-use: reverts if already set.
+    /// @dev Only callable by the owner. Reverts if dao != address(0) to prevent silent replacement.
     ///      In production, the owner should renounce ownership immediately after this call.
     /// @param newDAO New DAO contract address. Cannot be address(0).
     function setDAO(address newDAO) external onlyOwner {
         require(newDAO != address(0), "ZeroAddress");
-        require(newDAO != dao, "DAOAlreadySet");
-        
+        require(dao == address(0), "DAOAlreadySet");
+
         address oldDAO = dao;
         dao = newDAO;
-        Ownable(dao);
 
         emit DAOSet(oldDAO, newDAO);
     }
 
     /// @notice Transfers ETH from the treasury to `to`. Only callable by the DAO.
-    /// @dev CEI + nonReentrant. Sequence:
-    ///      1. require(msg.sender == dao)
-    ///      2. require(to != address(0), amount > 0, address(this).balance >= amount)
-    ///      3. emit TreasuryAction
-    ///      4. (bool ok,) = to.call{value: amount}(""); require(ok, "ETHTransferFailed")
+    /// @dev CEI + nonReentrant. Emits TreasuryAction before the low-level call.
     ///      Low-level call is used to support smart-contract recipients with custom receive() logic.
     /// @param to Recipient address. Cannot be address(0).
     /// @param amount ETH to transfer in wei. Must be > 0 and <= address(this).balance.
@@ -82,16 +78,10 @@ contract DAOTreasury is Ownable, ReentrancyGuard {
         require(address(this).balance >= amount, "InsufficientETH");
         require(bytes(reason).length > 0, "InvalidReason");
 
-        uint256 userETHBalance = to.balance;
-        uint256 treasuryETHBalance = address(this).balance;
-
-        (bool success, ) = to.call{value: amount}("");
-        require(success, "ETHTransferFailed");
-
-        userETHBalance += amount;
-        treasuryETHBalance -= amount;
-
         emit TreasuryAction(address(0), to, amount, reason);
+
+        (bool success,) = to.call{value: amount}("");
+        require(success, "ETHTransferFailed");
     }
 
     /// @notice Transfers ERC20 tokens from the treasury to `to`. Only callable by the DAO.
@@ -103,29 +93,28 @@ contract DAOTreasury is Ownable, ReentrancyGuard {
     /// @param reason Human-readable reason stored on-chain via TreasuryAction event.
     function withdrawERC20(address token, address to, uint256 amount, string calldata reason) external nonReentrant {
         require(msg.sender == dao, "OnlyDAO");
-        require(token != address(0), "ETHNotAccepted");
+        require(token != address(0), "ZeroAddress");
         require(to != address(0), "ZeroAddress");
         require(amount > 0, "ZeroAmount");
         require(IERC20(token).balanceOf(address(this)) >= amount, "InsufficientTokenBalance");
         require(bytes(reason).length > 0, "InvalidReason");
 
-        uint256 userTokenBalance = IERC20(token).balanceOf(to);
-        uint256 treasuryTokenBalance = IERC20(token).balanceOf(address(this));
+        emit TreasuryAction(token, to, amount, reason);
 
         IERC20(token).safeTransfer(to, amount);
-        
-        userTokenBalance += amount;
-        treasuryTokenBalance -= amount;
-
-        emit TreasuryAction(token, to, amount, reason);
     }
 
     /// @notice Returns the current ETH balance held by the treasury.
     /// @return balance ETH balance in wei.
-    function getETHBalance() external view returns (uint256 balance) {}
+    function getETHBalance() external view returns (uint256 balance) {
+        balance = address(this).balance;
+    }
 
     /// @notice Returns the treasury's balance of a given ERC20 token.
     /// @param token ERC20 token to query.
     /// @return balance Token balance in the token's smallest unit.
-    function getTokenBalance(address token) external view returns (uint256 balance) {}
+    function getTokenBalance(address token) external view returns (uint256 balance) {
+        require(token != address(0), "ZeroAddress");
+        balance = IERC20(token).balanceOf(address(this));
+    }
 }
