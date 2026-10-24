@@ -5,6 +5,7 @@ import "../../lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 import "../../lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 import "../../lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import "../../lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
+import "../tokens/GovernanceToken.sol";
 
 /// @title YieldFarmingPool
 /// @notice LP token staking pool that distributes GovernanceToken rewards to stakers.
@@ -76,7 +77,7 @@ contract YieldFarmingPool is ReentrancyGuard, Ownable {
     constructor(address lpToken_, address govToken_, uint256 initialRewardRate, address initialOwner) Ownable(initialOwner) {
         require(lpToken_ != address(0), "ZeroAddress");
         require(govToken_ != address(0), "ZeroAddress");
-        require(initialOwner != address(0), "ZeroAddress"); 
+        require(initialOwner != address(0), "ZeroAddress");
         require(initialRewardRate > 0, "ZeroRate");
         lpToken = lpToken_;
         govToken = govToken_;
@@ -107,7 +108,7 @@ contract YieldFarmingPool is ReentrancyGuard, Ownable {
     /// @param amount Amount of LP tokens to stake. Must be greater than zero.
     function stake(uint256 amount) external nonReentrant {
         require(amount > 0, "ZeroAmount");
-        
+
         _updateReward(msg.sender);
 
         balances[msg.sender] += amount;
@@ -143,18 +144,19 @@ contract YieldFarmingPool is ReentrancyGuard, Ownable {
     }
 
     /// @notice Claims all pending GovernanceToken rewards for the caller.
-    /// @dev CEI: rewards[msg.sender] is zeroed BEFORE the external mint/transfer call to prevent
+    /// @dev CEI: rewards[msg.sender] is zeroed BEFORE the external mint call to prevent
     ///      reentrancy-based double-claim. Reverts with "NoRewards" if pending balance is zero.
+    ///      The minted amount is capped by the GovernanceToken supply cap (see _safeRewardTransfer).
     function harvest() external nonReentrant {
         _updateReward(msg.sender);
-        require(rewards[msg.sender] > 0, "NoRewards");
-
         uint256 reward = rewards[msg.sender];
+        require(reward > 0, "NoRewards");
+
         rewards[msg.sender] = 0;
 
-        IERC20(govToken).safeTransfer(msg.sender, reward);
+        uint256 paid = _safeRewardTransfer(msg.sender, reward);
 
-        emit RewardHarvested(msg.sender, reward);
+        emit RewardHarvested(msg.sender, paid);
     }
 
     /// @notice Withdraws all staked LP tokens and claims all pending rewards in one transaction.
@@ -172,10 +174,10 @@ contract YieldFarmingPool is ReentrancyGuard, Ownable {
         totalStaked -= userBalance;
 
         IERC20(lpToken).safeTransfer(msg.sender, userBalance);
-        
-        if(userRewards > 0) {
-            IERC20(govToken).safeTransfer(msg.sender, userRewards);
-            emit RewardHarvested(msg.sender, userRewards);
+
+        if (userRewards > 0) {
+            uint256 paid = _safeRewardTransfer(msg.sender, userRewards);
+            emit RewardHarvested(msg.sender, paid);
         }
 
         emit Unstaked(msg.sender, userBalance);
@@ -186,20 +188,37 @@ contract YieldFarmingPool is ReentrancyGuard, Ownable {
     ///      Pure view; does not modify state.
     /// @param user Address of the staker to query.
     /// @return pending Total reward tokens owed to `user` in govToken wei.
-    function earned(address user) external view returns (uint256 pending) {}
+    function earned(address user) public view returns (uint256 pending) {
+        pending = rewards[user] + balances[user] * (rewardPerToken() - userRewardPerTokenPaid[user]) / 1e18;
+        return pending;
+    }
 
     /// @notice Returns the current accumulated reward per staked LP token, scaled 1e18.
     /// @dev Returns rewardPerTokenStored unchanged when totalStaked == 0 to avoid division by zero.
     ///      Formula (when totalStaked > 0):
     ///      rewardPerTokenStored + (block.timestamp - lastUpdateTime) * rewardRate * 1e18 / totalStaked
     /// @return rpt Current reward-per-token accumulator value.
-    function rewardPerToken() public view returns (uint256 rpt) {}
+    function rewardPerToken() public view returns (uint256 rpt) {
+        if (totalStaked == 0) return rewardPerTokenStored;
+
+        rpt = rewardPerTokenStored + (block.timestamp - lastUpdateTime) * rewardRate * 1e18 / totalStaked;
+        return rpt;
+    }
 
     /// @notice Updates the reward emission rate. Only callable by the DAO.
     /// @dev MUST call _updateReward(address(0)) first to checkpoint the accumulator at the old
     ///      rate before switching; otherwise the new rate would be applied retroactively.
     /// @param newRate New emission rate in govToken wei per second. May be zero to pause emissions.
-    function setRewardRate(uint256 newRate) external {}
+    function setRewardRate(uint256 newRate) external {
+        require(msg.sender == dao, "OnlyDAO");
+        require(newRate != rewardRate, "Same reward rate");
+
+        _updateReward(address(0));
+        uint256 oldRate = rewardRate;
+        rewardRate = newRate;
+
+        emit RewardRateUpdated(oldRate, newRate);
+    }
 
     /// @dev Checkpoints the global accumulator and, if user != address(0), syncs the user's rewards.
     ///      Must be called before any modification to balances or totalStaked. Steps:
@@ -207,13 +226,29 @@ contract YieldFarmingPool is ReentrancyGuard, Ownable {
     ///      2. lastUpdateTime = block.timestamp
     ///      3. if user != address(0): rewards[user] = earned(user); userRewardPerTokenPaid[user] = rewardPerTokenStored
     /// @param user Address whose rewards to sync, or address(0) to update only global state.
-    function _updateReward(address user) internal {}
+    function _updateReward(address user) internal {
+        rewardPerTokenStored = rewardPerToken();
+        lastUpdateTime = block.timestamp;
 
-    /// @dev Transfers `amount` govToken to `to`, capping at the contract's actual govToken balance.
-    ///      Used when the pool operates with a pre-minted supply instead of calling mint() directly.
-    ///      If amount > govToken.balanceOf(address(this)), transfers the available balance.
-    ///      Skips the transfer entirely if the capped amount is zero.
+        if (user != address(0)) {
+            rewards[user] = earned(user);
+            userRewardPerTokenPaid[user] = rewardPerTokenStored;
+        }
+    }
+
+    /// @dev Mints `amount` govToken to `to`, capped at the GovernanceToken's remaining mintable supply
+    ///      (maxSupply - totalSupply) so harvest() and exit() never revert once the cap is reached.
+    ///      Skips the mint entirely if the capped amount is zero. Callers must zero the user's
+    ///      rewards before calling (CEI); any amount above the cap is forfeited.
+    ///      Requires this contract to hold MINTER_ROLE on the GovernanceToken.
     /// @param to Recipient of the reward tokens.
-    /// @param amount Desired transfer amount; capped to available balance if insufficient.
-    function _safeRewardTransfer(address to, uint256 amount) internal {}
+    /// @param amount Desired mint amount; capped to the remaining supply if insufficient.
+    /// @return paid Amount of govToken actually minted to `to`.
+    function _safeRewardTransfer(address to, uint256 amount) internal returns (uint256 paid) {
+        GovernanceToken token = GovernanceToken(govToken);
+        uint256 available = token.maxSupply() - token.totalSupply();
+        paid = amount > available ? available : amount;
+
+        if (paid > 0) token.mint(to, paid); 
+    }
 }

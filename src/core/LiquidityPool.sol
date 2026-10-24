@@ -141,10 +141,10 @@ contract LiquidityPool is ERC20, Ownable, ReentrancyGuard {
         require(amountA >= amountAMin, "SlippageExceeded");
         require(amountB >= amountBMin, "SlippageExceeded");
 
-        lpMinted = _applyLiquidity(amountA, amountB, to);
-
         IERC20(tokenA).safeTransferFrom(msg.sender, address(this), amountA);
         IERC20(tokenB).safeTransferFrom(msg.sender, address(this), amountB);
+
+        lpMinted = _applyLiquidity(amountA, amountB, to);
 
         emit LiquidityAdded(msg.sender, amountA, amountB, lpMinted);
     }
@@ -184,11 +184,10 @@ contract LiquidityPool is ERC20, Ownable, ReentrancyGuard {
     }
 
     /// @notice Swaps an exact amount of one pool token for the other using the x·y=k formula.
-    /// @dev Fee split: feeAmount = amountIn * feeBps / FEE_DENOMINATOR.
-    ///      treasuryFee = feeAmount * TREASURY_FEE_SHARE / 100 → sent to treasury.
-    ///      Remaining fee (feeAmount - treasuryFee) stays in the pool, accruing to LPs.
-    ///      amountOut = reserveOut * amountInNet / (reserveIn + amountInNet)
-    ///        where amountInNet = amountIn - feeAmount.
+    /// @dev Fee split: treasuryFee = amountIn * feeBps * TREASURY_FEE_SHARE / (FEE_DENOMINATOR * 100) → sent to treasury.
+    ///      Remaining fee (80%) stays in the pool, accruing to LPs via k growth.
+    ///      amountOut avoids intermediate truncation (Uniswap v2 style):
+    ///        amountOut = reserveOut * amountIn * (FEE_DENOMINATOR - feeBps) / (reserveIn * FEE_DENOMINATOR + amountIn * (FEE_DENOMINATOR - feeBps))
     ///      CEI: reserves are updated BEFORE any token transfers.
     /// @param tokenIn Address of the token being sold. Must be tokenA or tokenB.
     /// @param amountIn Exact amount of tokenIn to sell. Must be greater than zero.
@@ -207,12 +206,12 @@ contract LiquidityPool is ERC20, Ownable, ReentrancyGuard {
         require(reserveIn > 0 && reserveOut > 0, "ZeroReserve");
 
         uint256 feeAmount = (amountIn * feeBps) / FEE_DENOMINATOR;
-        uint256 treasuryFee = (feeAmount * TREASURY_FEE_SHARE) / 100;
-        uint256 amountInNet = amountIn - feeAmount;
-
-        amountOut = (reserveOut * amountInNet) / (reserveIn + amountInNet);
+        uint256 amountInWithFee = amountIn * (FEE_DENOMINATOR - feeBps);
+        amountOut = (reserveOut * amountInWithFee) / (reserveIn * FEE_DENOMINATOR + amountInWithFee);
         require(amountOut > 0, "InsufficientOutputAmount");
         require(amountOut >= minAmountOut, "SlippageExceeded");
+
+        uint256 treasuryFee = (amountIn * feeBps * TREASURY_FEE_SHARE) / (FEE_DENOMINATOR * 100);
 
         if (isTokenA) {
             reserveA = reserveA + amountIn - treasuryFee;
