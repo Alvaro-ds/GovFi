@@ -54,7 +54,16 @@ contract DAOTreasury is Ownable, ReentrancyGuard {
     ///      to prevent the owner from silently replacing the DAO after the ecosystem is live.
     ///      In production, the owner should renounce ownership immediately after this call.
     /// @param newDAO New DAO contract address. Cannot be address(0).
-    function setDAO(address newDAO) external onlyOwner {}
+    function setDAO(address newDAO) external onlyOwner {
+        require(newDAO != address(0), "ZeroAddress");
+        require(newDAO != dao, "DAOAlreadySet");
+        
+        address oldDAO = dao;
+        dao = newDAO;
+        Ownable(dao);
+
+        emit DAOSet(oldDAO, newDAO);
+    }
 
     /// @notice Transfers ETH from the treasury to `to`. Only callable by the DAO.
     /// @dev CEI + nonReentrant. Sequence:
@@ -66,7 +75,24 @@ contract DAOTreasury is Ownable, ReentrancyGuard {
     /// @param to Recipient address. Cannot be address(0).
     /// @param amount ETH to transfer in wei. Must be > 0 and <= address(this).balance.
     /// @param reason Human-readable reason stored on-chain via TreasuryAction event.
-    function withdrawETH(address to, uint256 amount, string calldata reason) external nonReentrant {}
+    function withdrawETH(address to, uint256 amount, string calldata reason) external nonReentrant {
+        require(msg.sender == dao, "OnlyDAO");
+        require(to != address(0), "ZeroAddress");
+        require(amount > 0, "ZeroAmount");
+        require(address(this).balance >= amount, "InsufficientETH");
+        require(bytes(reason).length > 0, "InvalidReason");
+
+        uint256 userETHBalance = to.balance;
+        uint256 treasuryETHBalance = address(this).balance;
+
+        (bool success, ) = to.call{value: amount}("");
+        require(success, "ETHTransferFailed");
+
+        userETHBalance += amount;
+        treasuryETHBalance -= amount;
+
+        emit TreasuryAction(address(0), to, amount, reason);
+    }
 
     /// @notice Transfers ERC20 tokens from the treasury to `to`. Only callable by the DAO.
     /// @dev Uses SafeERC20.safeTransfer to handle tokens that do not return a bool (e.g. USDT).
@@ -75,7 +101,24 @@ contract DAOTreasury is Ownable, ReentrancyGuard {
     /// @param to Recipient address. Cannot be address(0).
     /// @param amount Amount to transfer. Must be > 0 and <= the treasury's token balance.
     /// @param reason Human-readable reason stored on-chain via TreasuryAction event.
-    function withdrawERC20(address token, address to, uint256 amount, string calldata reason) external nonReentrant {}
+    function withdrawERC20(address token, address to, uint256 amount, string calldata reason) external nonReentrant {
+        require(msg.sender == dao, "OnlyDAO");
+        require(token != address(0), "ETHNotAccepted");
+        require(to != address(0), "ZeroAddress");
+        require(amount > 0, "ZeroAmount");
+        require(IERC20(token).balanceOf(address(this)) >= amount, "InsufficientTokenBalance");
+        require(bytes(reason).length > 0, "InvalidReason");
+
+        uint256 userTokenBalance = IERC20(token).balanceOf(to);
+        uint256 treasuryTokenBalance = IERC20(token).balanceOf(address(this));
+
+        IERC20(token).safeTransfer(to, amount);
+        
+        userTokenBalance += amount;
+        treasuryTokenBalance -= amount;
+
+        emit TreasuryAction(token, to, amount, reason);
+    }
 
     /// @notice Returns the current ETH balance held by the treasury.
     /// @return balance ETH balance in wei.
