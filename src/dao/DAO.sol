@@ -146,7 +146,7 @@ contract DAO is Ownable2Step, ReentrancyGuard {
     /// @param calldatas ABI-encoded calls. Length must match targets.
     /// @param description Human-readable proposal description stored on-chain.
     /// @return proposalId Monotonically increasing identifier of the new proposal.
-    function propose(address[] calldata targets, uint256[] calldata values, bytes[] calldata calldatas, string calldata description) external returns (uint256 proposalId) {
+    function propose(address[] calldata targets, uint256[] calldata values, bytes[] memory calldatas, string calldata description) external returns (uint256 proposalId) {
         require(IVotes(govToken).getPastVotes(msg.sender, block.number - 1) >= proposalThreshold, "BelowProposalThreshold");
         require(bytes(description).length > 0, "EmptyProposal");
         require(targets.length > 0, "EmptyProposal");

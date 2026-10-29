@@ -45,7 +45,7 @@ contract LiquidityPool is ERC20, Ownable, ReentrancyGuard {
     uint256 public constant TREASURY_FEE_SHARE = 20;
 
     /// @notice Minimum LP units permanently locked on the first deposit to prevent the inflation attack.
-    uint256 private constant MINIMUM_LIQUIDITY = 1000;
+    uint256 public constant MINIMUM_LIQUIDITY = 1000;
 
     /// @notice Emitted when liquidity is added to the pool.
     /// @param provider Address that provided the liquidity.

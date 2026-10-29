@@ -49,4 +49,257 @@ contract YieldFarmingPoolTest is Test {
         lpToken.approve(address(yieldPool), type(uint256).max);
         vm.stopPrank();
     }
+
+    // ─── constructor ──────────────────────────────────────────────────────────
+
+    function testConstructorRevertsZeroLpToken() public {
+        vm.expectRevert("ZeroAddress");
+        new YieldFarmingPool(address(0), address(govToken), INITIAL_REWARD_RATE, owner);
+    }
+
+    function testConstructorRevertsZeroGovToken() public {
+        vm.expectRevert("ZeroAddress");
+        new YieldFarmingPool(address(lpToken), address(0), INITIAL_REWARD_RATE, owner);
+    }
+
+    function testConstructorRevertsZeroOwner() public {
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableInvalidOwner.selector, address(0)));
+        new YieldFarmingPool(address(lpToken), address(govToken), INITIAL_REWARD_RATE, address(0));
+    }
+
+    function testConstructorRevertsZeroRate() public {
+        vm.expectRevert("ZeroRate");
+        new YieldFarmingPool(address(lpToken), address(govToken), 0, owner);
+    }
+
+    // ─── setDAO ───────────────────────────────────────────────────────────────
+
+    function testSetDAORevertsIfAlreadySet() public {
+        vm.startPrank(owner);
+        vm.expectRevert("DAOAlreadySet");
+        yieldPool.setDAO(dao);
+        vm.stopPrank();
+    }
+
+    function testSetDAORevertsIfZeroAddress() public {
+        vm.startPrank(owner);
+        YieldFarmingPool freshPool = new YieldFarmingPool(address(lpToken), address(govToken), INITIAL_REWARD_RATE, owner);
+        vm.expectRevert("ZeroAddress");
+        freshPool.setDAO(address(0));
+        vm.stopPrank();
+    }
+
+    // ─── stake ────────────────────────────────────────────────────────────────
+
+    function testStake() public {
+        uint256 amount = 100e18;
+
+        vm.startPrank(user1);
+        yieldPool.stake(amount);
+        vm.stopPrank();
+
+        assertEq(yieldPool.balances(user1), amount);
+        assertEq(yieldPool.totalStaked(), amount);
+        assertEq(lpToken.balanceOf(address(yieldPool)), amount);
+    }
+
+    function testStakeRevertsIfZeroAmount() public {
+        vm.startPrank(user1);
+        vm.expectRevert("ZeroAmount");
+        yieldPool.stake(0);
+        vm.stopPrank();
+    }
+
+    function testStakeUpdatesRewards() public {
+        vm.startPrank(user1);
+        yieldPool.stake(100e18);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 100);
+
+        uint256 earnedBefore = yieldPool.earned(user1);
+        assertGt(earnedBefore, 0);
+
+        vm.startPrank(user1);
+        yieldPool.stake(1e18);
+        vm.stopPrank();
+
+        assertGt(yieldPool.rewards(user1), 0);
+    }
+
+    // ─── unstake ──────────────────────────────────────────────────────────────
+
+    function testUnstake() public {
+        uint256 amount = 100e18;
+
+        vm.startPrank(user1);
+        yieldPool.stake(amount);
+        yieldPool.unstake(amount);
+        vm.stopPrank();
+
+        assertEq(yieldPool.balances(user1), 0);
+        assertEq(yieldPool.totalStaked(), 0);
+    }
+
+    function testUnstakeRevertsIfZeroAmount() public {
+        vm.startPrank(user1);
+        yieldPool.stake(100e18);
+        vm.expectRevert("ZeroAmount");
+        yieldPool.unstake(0);
+        vm.stopPrank();
+    }
+
+    function testUnstakeRevertsIfInsufficientStake() public {
+        vm.startPrank(user1);
+        yieldPool.stake(100e18);
+        vm.expectRevert("InsufficientStake");
+        yieldPool.unstake(101e18);
+        vm.stopPrank();
+    }
+
+    function testUnstakePartial() public {
+        vm.startPrank(user1);
+        yieldPool.stake(100e18);
+        yieldPool.unstake(50e18);
+        vm.stopPrank();
+
+        assertEq(yieldPool.balances(user1), 50e18);
+        assertEq(yieldPool.totalStaked(), 50e18);
+    }
+
+    // ─── harvest ──────────────────────────────────────────────────────────────
+
+    function testHarvest() public {
+        vm.startPrank(user1);
+        yieldPool.stake(100e18);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 100);
+
+        vm.startPrank(user1);
+        yieldPool.harvest();
+        vm.stopPrank();
+
+        assertGt(govToken.balanceOf(user1), 0);
+    }
+
+    function testHarvestRevertsIfNoRewards() public {
+        vm.startPrank(user1);
+        yieldPool.stake(100e18);
+        vm.expectRevert("NoRewards");
+        yieldPool.harvest();
+        vm.stopPrank();
+    }
+
+    // ─── exit ─────────────────────────────────────────────────────────────────
+
+    function testExit() public {
+        uint256 amount = 100e18;
+        uint256 lpBefore = lpToken.balanceOf(user1);
+
+        vm.startPrank(user1);
+        yieldPool.stake(amount);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 100);
+
+        vm.startPrank(user1);
+        yieldPool.exit();
+        vm.stopPrank();
+
+        assertEq(lpToken.balanceOf(user1), lpBefore);
+        assertGt(govToken.balanceOf(user1), 0);
+        assertEq(yieldPool.balances(user1), 0);
+    }
+
+    function testExitRevertsIfZeroBalance() public {
+        vm.startPrank(user1);
+        vm.expectRevert("ZeroLPToken");
+        yieldPool.exit();
+        vm.stopPrank();
+    }
+
+    function testExitWithoutRewards() public {
+        uint256 amount = 100e18;
+        uint256 lpBefore = lpToken.balanceOf(user1);
+
+        vm.startPrank(user1);
+        yieldPool.stake(amount);
+        yieldPool.exit();
+        vm.stopPrank();
+
+        assertEq(lpToken.balanceOf(user1), lpBefore);
+        assertEq(govToken.balanceOf(user1), 0);
+        assertEq(yieldPool.balances(user1), 0);
+    }
+
+    // ─── earned / rewardPerToken ──────────────────────────────────────────────
+
+    function testEarnedIsZeroWithNoStake() public {
+        assertEq(yieldPool.earned(user1), 0);
+    }
+
+    function testEarnedAccruesOverTime() public {
+        vm.startPrank(user1);
+        yieldPool.stake(100e18);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 1000);
+
+        assertGt(yieldPool.earned(user1), 0);
+    }
+
+    function testRewardPerTokenZeroWhenNoStakers() public {
+        uint256 stored = yieldPool.rewardPerTokenStored();
+        assertEq(yieldPool.rewardPerToken(), stored);
+    }
+
+    // ─── setRewardRate ────────────────────────────────────────────────────────
+
+    function testSetRewardRate() public {
+        uint256 newRate = 2e18;
+
+        vm.startPrank(dao);
+        vm.expectEmit(false, false, false, true);
+        emit YieldFarmingPool.RewardRateUpdated(INITIAL_REWARD_RATE, newRate);
+        yieldPool.setRewardRate(newRate);
+        vm.stopPrank();
+
+        assertEq(yieldPool.rewardRate(), newRate);
+    }
+
+    function testSetRewardRateRevertsIfNotDAO() public {
+        vm.startPrank(user1);
+        vm.expectRevert("OnlyDAO");
+        yieldPool.setRewardRate(2e18);
+        vm.stopPrank();
+    }
+
+    function testSetRewardRateRevertsIfSameRate() public {
+        vm.startPrank(dao);
+        vm.expectRevert("Same reward rate");
+        yieldPool.setRewardRate(INITIAL_REWARD_RATE);
+        vm.stopPrank();
+    }
+
+    // ─── multi-user ───────────────────────────────────────────────────────────
+
+    function testMultiUserRewardsAreProportional() public {
+        vm.startPrank(user1);
+        yieldPool.stake(200e18);
+        vm.stopPrank();
+
+        vm.startPrank(user2);
+        yieldPool.stake(100e18);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 1000);
+
+        uint256 earned1 = yieldPool.earned(user1);
+        uint256 earned2 = yieldPool.earned(user2);
+
+        assertGt(earned1, 0);
+        assertGt(earned2, 0);
+        assertApproxEqRel(earned1, earned2 * 2, 1e15);
+    }
 }

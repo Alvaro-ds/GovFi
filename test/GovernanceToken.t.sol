@@ -11,7 +11,6 @@ contract GovernanceTokenTest is Test {
     address internal owner = vm.addr(1);
     address internal minter = vm.addr(2);
     address internal user = vm.addr(3);
-    address internal attacker = vm.addr(4);
 
     uint256 internal constant MAX_SUPPLY = 1000000e18;
 
@@ -19,7 +18,6 @@ contract GovernanceTokenTest is Test {
         vm.label(owner, "owner");
         vm.label(minter, "minter");
         vm.label(user, "user");
-        vm.label(attacker, "attacker");
 
         vm.startPrank(owner);
         govToken = new GovernanceToken(MAX_SUPPLY, "GovFi", "GOV", owner);
@@ -30,12 +28,12 @@ contract GovernanceTokenTest is Test {
     }
 
     function testMinterRoleCanMint() public {
-       address to = user;
-       uint256 amount = 500e18;
+        address to = user;
+        uint256 amount = 500e18;
 
-       vm.startPrank(minter);
-       govToken.mint(to, amount);
-       vm.stopPrank();
+        vm.startPrank(minter);
+        govToken.mint(to, amount);
+        vm.stopPrank();
     }
 
     function testUserCannotMint() public {
@@ -57,7 +55,7 @@ contract GovernanceTokenTest is Test {
         govToken.mint(to, amount);
 
         uint256 amountToExceed = 11e18;
-        
+
         vm.expectRevert("SupplyExceeded");
         govToken.mint(to, amountToExceed);
         vm.stopPrank();
@@ -65,7 +63,7 @@ contract GovernanceTokenTest is Test {
         assertEq(govToken.totalSupply(), amount);
     }
 
-    function testUserCanBurn() public{
+    function testUserCanBurn() public {
         address to = user;
         uint256 amountMinted = 500e18;
         uint256 amountBurned = amountMinted / 2e18;
@@ -88,7 +86,7 @@ contract GovernanceTokenTest is Test {
         vm.stopPrank();
     }
 
-    function testMinterRoleIsGrantedCorrectly() public{
+    function testMinterRoleIsGrantedCorrectly() public {
         vm.startPrank(owner);
         govToken.grantMinterRole(user);
         vm.stopPrank();
@@ -96,7 +94,7 @@ contract GovernanceTokenTest is Test {
         assertTrue(govToken.hasRole(govToken.MINTER_ROLE(), user));
     }
 
-    function testUserCannotGrantMinterRole() public{
+    function testUserCannotGrantMinterRole() public {
         vm.startPrank(user);
         vm.expectRevert();
         govToken.grantMinterRole(user);
@@ -105,7 +103,7 @@ contract GovernanceTokenTest is Test {
         assertFalse(govToken.hasRole(govToken.MINTER_ROLE(), user));
     }
 
-    function testMinterCannotGrantMinterRole() public{
+    function testMinterCannotGrantMinterRole() public {
         vm.startPrank(minter);
         vm.expectRevert();
         govToken.grantMinterRole(user);
@@ -114,7 +112,7 @@ contract GovernanceTokenTest is Test {
         assertFalse(govToken.hasRole(govToken.MINTER_ROLE(), user));
     }
 
-    function testCannotGrantMinterRoleToZeroAddress() public{
+    function testCannotGrantMinterRoleToZeroAddress() public {
         vm.startPrank(owner);
         vm.expectRevert("ZeroAddress");
         govToken.grantMinterRole(address(0));
@@ -138,5 +136,52 @@ contract GovernanceTokenTest is Test {
         vm.stopPrank();
 
         assertTrue(govToken.hasRole(govToken.MINTER_ROLE(), minter));
+    }
+
+    function testMaxSupplyReachedEventEmitted() public {
+        vm.startPrank(minter);
+        vm.expectEmit(false, false, false, true);
+        emit GovernanceToken.MaxSupplyReached(MAX_SUPPLY);
+        govToken.mint(user, MAX_SUPPLY);
+        vm.stopPrank();
+    }
+
+    function testDelegateSelf() public {
+        uint256 amount = 500e18;
+
+        vm.startPrank(minter);
+        govToken.mint(user, amount);
+        vm.stopPrank();
+
+        vm.startPrank(user);
+        govToken.delegate(user);
+        vm.stopPrank();
+
+        assertEq(govToken.getVotes(user), amount);
+    }
+
+    function testVotingPowerSnapshot() public {
+        uint256 amount = 500e18;
+
+        vm.startPrank(minter);
+        govToken.mint(user, amount);
+        vm.stopPrank();
+
+        vm.startPrank(user);
+        govToken.delegate(user);
+        vm.stopPrank();
+
+        uint256 snapshotBlock = block.number;
+        vm.roll(block.number + 1);
+
+        assertEq(govToken.getPastVotes(user, snapshotBlock), amount);
+    }
+
+    function testNonces() public {
+        assertEq(govToken.nonces(user), 0);
+    }
+
+    function testMaxSupply() public {
+        assertEq(govToken.maxSupply(), MAX_SUPPLY);
     }
 }

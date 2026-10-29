@@ -85,4 +85,91 @@ contract IntegrationTest is Test {
     function lpToken() internal view returns (IERC20) {
         return IERC20(address(pool));
     }
+
+    // ─── Tests ────────────────────────────────────────────────────────────────
+
+    function testFullLiquidityAndStakingFlow() public {
+        uint256 deadline = block.timestamp + 1 days;
+
+        vm.startPrank(lp);
+        pool.addLiquidity(50000e18, 50000e18, 0, 0, lp, deadline);
+        uint256 lpBalance = pool.balanceOf(lp);
+        yieldPool.stake(lpBalance);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 86400);
+
+        vm.startPrank(lp);
+        yieldPool.harvest();
+        vm.stopPrank();
+
+        assertGt(govToken.balanceOf(lp), 0);
+        assertGt(yieldPool.balances(lp), 0);
+    }
+
+    function testSwapGeneratesTreasuryFees() public {
+        uint256 deadline = block.timestamp + 1 days;
+
+        vm.startPrank(lp);
+        pool.addLiquidity(50000e18, 50000e18, 0, 0, lp, deadline);
+        vm.stopPrank();
+
+        vm.startPrank(trader);
+        pool.swap(address(tokenA), 1000e18, 0, trader, deadline);
+        vm.stopPrank();
+
+        assertGt(tokenA.balanceOf(address(treasury)), 0);
+    }
+
+    function testGovernanceProposalFlow() public {
+        address dummy = vm.addr(10);
+        vm.startPrank(deployer);
+        govToken.mint(dummy, 50000e18);
+        vm.stopPrank();
+        vm.startPrank(dummy);
+        govToken.delegate(dummy);
+        vm.stopPrank();
+
+        vm.roll(block.number + 1);
+
+        address[] memory targets = new address[](1);
+        uint256[] memory values = new uint256[](1);
+        bytes[] memory calldatas = new bytes[](1);
+
+        targets[0] = address(yieldPool);
+        values[0] = 0;
+        calldatas[0] = abi.encodeWithSelector(YieldFarmingPool.setRewardRate.selector, 2e18);
+
+        vm.startPrank(voter);
+        uint256 proposalId = dao.propose(targets, values, calldatas, "Increase reward rate to 2e18");
+        dao.castVote(proposalId, true);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + VOTING_PERIOD + 1);
+
+        DAO.ProposalState proposalState = dao.state(proposalId);
+        assertEq(uint256(proposalState), uint256(DAO.ProposalState.Defeated));
+    }
+
+    function testFullExitFlow() public {
+        uint256 deadline = block.timestamp + 1 days;
+
+        vm.startPrank(lp);
+        pool.addLiquidity(50000e18, 50000e18, 0, 0, lp, deadline);
+        uint256 lpBalance = pool.balanceOf(lp);
+        yieldPool.stake(lpBalance);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 86400);
+
+        uint256 lpBefore = pool.balanceOf(lp);
+
+        vm.startPrank(lp);
+        yieldPool.exit();
+        vm.stopPrank();
+
+        assertGt(pool.balanceOf(lp), lpBefore);
+        assertGt(govToken.balanceOf(lp), 0);
+        assertEq(yieldPool.balances(lp), 0);
+    }
 }
