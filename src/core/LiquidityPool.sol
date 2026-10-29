@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity ^0.8.24;
+pragma solidity 0.8.33;
 
 import "../../lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
 import "../../lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
@@ -289,7 +289,6 @@ contract LiquidityPool is ERC20, Ownable, ReentrancyGuard {
             uint256 liquidity = Math.sqrt(amountA * amountB);
             require(liquidity > MINIMUM_LIQUIDITY, "InsufficientInitialLiquidity");
             lpMinted = liquidity - MINIMUM_LIQUIDITY;
-            _mint(address(1), MINIMUM_LIQUIDITY);
         } else {
             uint256 lpA = (amountA * supply) / reserveA;
             uint256 lpB = (amountB * supply) / reserveB;
@@ -298,6 +297,7 @@ contract LiquidityPool is ERC20, Ownable, ReentrancyGuard {
         require(lpMinted > 0, "InsufficientInitialLiquidity");
         reserveA += amountA;
         reserveB += amountB;
+        if (supply == 0) _mint(address(1), MINIMUM_LIQUIDITY);
         _mint(to, lpMinted);
     }
 }

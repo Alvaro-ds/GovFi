@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.33;
 
 import "../../lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 import "../../lib/openzeppelin-contracts/contracts/access/Ownable.sol";
@@ -59,6 +59,11 @@ contract YieldFarmingPool is ReentrancyGuard, Ownable {
     /// @param user Address of the claimer.
     /// @param reward Amount of GovernanceToken transferred.
     event RewardHarvested(address indexed user, uint256 reward);
+
+    /// @notice Emitted when accrued rewards are permanently lost because the govToken supply cap is exhausted.
+    /// @param user Address whose rewards were forfeited.
+    /// @param amount Amount of govToken wei that could not be minted.
+    event RewardForfeited(address indexed user, uint256 amount);
 
     /// @notice Emitted when the DAO updates the reward emission rate.
     /// @param oldRate Previous emission rate in govToken wei per second.
@@ -155,7 +160,7 @@ contract YieldFarmingPool is ReentrancyGuard, Ownable {
         rewards[msg.sender] = 0;
 
         uint256 paid = _safeRewardTransfer(msg.sender, reward);
-
+        if (paid < reward) emit RewardForfeited(msg.sender, reward - paid);
         emit RewardHarvested(msg.sender, paid);
     }
 
@@ -177,6 +182,7 @@ contract YieldFarmingPool is ReentrancyGuard, Ownable {
 
         if (userRewards > 0) {
             uint256 paid = _safeRewardTransfer(msg.sender, userRewards);
+            if (paid < userRewards) emit RewardForfeited(msg.sender, userRewards - paid);
             emit RewardHarvested(msg.sender, paid);
         }
 
@@ -249,6 +255,6 @@ contract YieldFarmingPool is ReentrancyGuard, Ownable {
         uint256 available = token.maxSupply() - token.totalSupply();
         paid = amount > available ? available : amount;
 
-        if (paid > 0) token.mint(to, paid); 
+        if (paid > 0) token.mint(to, paid);
     }
 }

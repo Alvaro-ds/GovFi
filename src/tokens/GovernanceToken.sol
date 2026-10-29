@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.33;
 
 import "../../lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
 import "../../lib/openzeppelin-contracts/contracts/token/ERC20/extensions/ERC20Permit.sol";
@@ -59,7 +59,7 @@ contract GovernanceToken is ERC20, ERC20Permit, ERC20Votes, AccessControl, Ownab
     function mint(address to, uint256 amount) external onlyRole(MINTER_ROLE) {
         require(totalSupply() + amount <= maxSupply_, "SupplyExceeded");
         _mint(to, amount);
-        
+
         if (totalSupply() == maxSupply_) {
             emit MaxSupplyReached(totalSupply());
         }
