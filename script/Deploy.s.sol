@@ -29,8 +29,8 @@ contract Deploy is Script {
         vm.startBroadcast(deployerPrivateKey);
 
         // ── Token pair (edit per chain) ────────────────────────────────────────
-        address tokenA_ = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48; // USDC (Ethereum mainnet)
-        address tokenB_ = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2; // WETH (Ethereum mainnet)
+        address tokenA_ = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831; // USDC en Arbitrum
+        address tokenB_ = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1; // WETH en Arbitrum
 
         // ── GovernanceToken ───────────────────────────────────────────────────
         uint256 govCap_ = 10000000e18; // 10 M GOV total supply cap
