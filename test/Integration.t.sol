@@ -7,7 +7,7 @@ import "../src/core/LiquidityPool.sol";
 import "../src/core/YieldFarmingPool.sol";
 import "../src/dao/DAO.sol";
 import "../src/dao/DAOTreasury.sol";
-import "./mocks/MockERC20.sol";
+import "./MockERC20.sol";
 
 contract IntegrationTest is Test {
     GovernanceToken internal govToken;

@@ -3,7 +3,77 @@ pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
 import "../src/core/LiquidityPool.sol";
-import "./mocks/MockERC20.sol";
+import "./MockERC20.sol";
+
+// ─── Invariant handler ────────────────────────────────────────────────────────
+
+/// @dev Exercises addLiquidity / removeLiquidity / swap in random order so the
+///      fuzzer can find reserve-accounting bugs and k-invariant violations.
+///      kBeforeLastSwap / kAfterLastSwap are recorded per swap so the invariant
+///      test can assert k never decreased during that operation.
+contract LiquidityPoolHandler is Test {
+    LiquidityPool public pool_;
+    MockERC20 public tokenA_;
+    MockERC20 public tokenB_;
+    address public actor_;
+
+    uint256 public kBeforeLastSwap;
+    uint256 public kAfterLastSwap;
+    bool public swapExecuted;
+
+    constructor(LiquidityPool pool, MockERC20 tA, MockERC20 tB, address actor) {
+        pool_ = pool;
+        tokenA_ = tA;
+        tokenB_ = tB;
+        actor_ = actor;
+        vm.startPrank(actor);
+        tA.approve(address(pool), type(uint256).max);
+        tB.approve(address(pool), type(uint256).max);
+        pool.approve(address(pool), type(uint256).max);
+        vm.stopPrank();
+    }
+
+    function addLiquidity(uint256 amountA, uint256 amountB) external {
+        amountA = bound(amountA, 1e6, 1e24);
+        amountB = bound(amountB, 1e6, 1e24);
+        if (tokenA_.balanceOf(actor_) < amountA) tokenA_.mint(actor_, amountA);
+        if (tokenB_.balanceOf(actor_) < amountB) tokenB_.mint(actor_, amountB);
+        vm.startPrank(actor_);
+        try pool_.addLiquidity(amountA, amountB, 0, 0, actor_, block.timestamp + 1) {} catch {}
+        vm.stopPrank();
+    }
+
+    function removeLiquidity(uint256 lpAmount) external {
+        uint256 balance = pool_.balanceOf(actor_);
+        if (balance == 0) return;
+        lpAmount = bound(lpAmount, 1, balance);
+        vm.startPrank(actor_);
+        try pool_.removeLiquidity(lpAmount, 0, 0, actor_, block.timestamp + 1) {} catch {}
+        vm.stopPrank();
+    }
+
+    function swap(uint256 amountIn, bool isTokenA) external {
+        (uint256 rA, uint256 rB) = pool_.getReserves();
+        if (rA == 0 || rB == 0) return;
+        uint256 k0 = rA * rB;
+
+        amountIn = bound(amountIn, 1e6, 1e22);
+        address tokenIn = isTokenA ? address(tokenA_) : address(tokenB_);
+        MockERC20 tokenInMock = isTokenA ? tokenA_ : tokenB_;
+        if (tokenInMock.balanceOf(actor_) < amountIn) tokenInMock.mint(actor_, amountIn);
+
+        vm.startPrank(actor_);
+        try pool_.swap(tokenIn, amountIn, 0, actor_, block.timestamp + 1) {
+            kBeforeLastSwap = k0;
+            (uint256 rA1, uint256 rB1) = pool_.getReserves();
+            kAfterLastSwap = rA1 * rB1;
+            swapExecuted = true;
+        } catch {}
+        vm.stopPrank();
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 contract LiquidityPoolTest is Test {
     LiquidityPool internal pool;
@@ -18,6 +88,8 @@ contract LiquidityPoolTest is Test {
     address internal dao = vm.addr(7);
 
     uint256 internal constant INITIAL_MINT = 1000000e18;
+
+    LiquidityPoolHandler internal handler;
 
     function setUp() public {
         vm.label(owner, "owner");
@@ -59,6 +131,9 @@ contract LiquidityPoolTest is Test {
         tokenA.approve(address(pool), type(uint256).max);
         tokenB.approve(address(pool), type(uint256).max);
         vm.stopPrank();
+
+        handler = new LiquidityPoolHandler(pool, tokenA, tokenB, lp2);
+        targetContract(address(handler));
     }
 
     function testOwnerCannotSetANewDAO() public {
@@ -453,5 +528,96 @@ contract LiquidityPoolTest is Test {
         vm.expectRevert("Fee is the same");
         pool.setFeeBps(30);
         vm.stopPrank();
+    }
+
+    // ─── fuzz tests ───────────────────────────────────────────────────────────
+
+    /// @dev After any swap the product reserveA * reserveB must never decrease.
+    ///      This is the core x·y=k safety property: LPs must not lose value to swappers.
+    function testFuzz_SwapKInvariantHolds(uint256 amountIn) public {
+        _initPool();
+        amountIn = bound(amountIn, 1e12, 10000e18);
+        tokenA.mint(trader, amountIn);
+
+        (uint256 rA0, uint256 rB0) = pool.getReserves();
+        uint256 k0 = rA0 * rB0;
+
+        vm.startPrank(trader);
+        pool.swap(address(tokenA), amountIn, 0, trader, block.timestamp + 1 days);
+        vm.stopPrank();
+
+        (uint256 rA1, uint256 rB1) = pool.getReserves();
+        assertGe(rA1 * rB1, k0);
+    }
+
+    /// @dev The treasury fee forwarded on every swap must be a strict subset of the
+    ///      total fee implied by feeBps. Any violation would mean the pool overpays.
+    function testFuzz_TreasuryFeeIsSubsetOfTotalFee(uint256 amountIn) public {
+        _initPool();
+        amountIn = bound(amountIn, 1e12, 10000e18);
+        tokenA.mint(trader, amountIn);
+
+        uint256 treasuryBefore = tokenA.balanceOf(treasury);
+
+        vm.startPrank(trader);
+        pool.swap(address(tokenA), amountIn, 0, trader, block.timestamp + 1 days);
+        vm.stopPrank();
+
+        uint256 actualTreasuryFee = tokenA.balanceOf(treasury) - treasuryBefore;
+        uint256 totalFee = (amountIn * pool.feeBps()) / pool.FEE_DENOMINATOR();
+        assertLe(actualTreasuryFee, totalFee);
+    }
+
+    /// @dev Adding then removing proportional liquidity must return positive token
+    ///      amounts and not break pool accounting.
+    function testFuzz_AddAndRemoveLiquidityProportional(uint256 amountA, uint256 amountB) public {
+        _initPool();
+        amountA = bound(amountA, 1e6, 500000e18);
+        amountB = bound(amountB, 1e6, 500000e18);
+
+        tokenA.mint(lp2, amountA);
+        tokenB.mint(lp2, amountB);
+
+        uint256 deadline = block.timestamp + 1 days;
+
+        vm.startPrank(lp2);
+        uint256 lpMinted = pool.addLiquidity(amountA, amountB, 0, 0, lp2, deadline);
+        vm.stopPrank();
+
+        assertGt(lpMinted, 0);
+
+        vm.startPrank(lp2);
+        (uint256 outA, uint256 outB) = pool.removeLiquidity(lpMinted, 0, 0, lp2, deadline);
+        vm.stopPrank();
+
+        assertGt(outA, 0);
+        assertGt(outB, 0);
+    }
+
+    // ─── invariant tests ──────────────────────────────────────────────────────
+
+    /// @dev Actual token balances must always be >= accounting reserves.
+    ///      Donations (direct transfers) can make balances > reserves, but the
+    ///      reverse must never happen or the pool would be under-reserved.
+    function invariant_ReservesLeActualBalances() public view {
+        (uint256 rA, uint256 rB) = pool.getReserves();
+        assertGe(tokenA.balanceOf(address(pool)), rA);
+        assertGe(tokenB.balanceOf(address(pool)), rB);
+    }
+
+    /// @dev Once the first deposit is made, MINIMUM_LIQUIDITY LP tokens must remain
+    ///      permanently locked at address(1) — they can never be burned by a user.
+    function invariant_MinimumLiquidityAlwaysLocked() public view {
+        if (pool.totalSupply() > 0) {
+            assertGe(pool.balanceOf(address(1)), pool.MINIMUM_LIQUIDITY());
+        }
+    }
+
+    /// @dev k must not decrease within a single swap execution.
+    ///      Compared against the pre-swap snapshot stored by the handler.
+    function invariant_KNeverDecreasesWithinSwap() public view {
+        if (handler.swapExecuted()) {
+            assertGe(handler.kAfterLastSwap(), handler.kBeforeLastSwap());
+        }
     }
 }

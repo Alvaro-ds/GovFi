@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.33;
 
 /// @title IDAO
 /// @notice Interface for the GovFi governance contract, used by treasury and off-chain tooling.

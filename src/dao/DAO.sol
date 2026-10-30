@@ -319,6 +319,7 @@ contract DAO is Ownable2Step, ReentrancyGuard {
     /// @param newQuorumBps New quorum fraction in basis points. Must be <= 10000.
     function setQuorumBps(uint256 newQuorumBps) external {
         require(msg.sender == address(this), "OnlyDAO");
+        require(newQuorumBps > 0, "ZeroQuorum");
         require(newQuorumBps <= 10000, "InvalidQuorum");
 
         uint256 oldQuorumBps = quorumBps;
@@ -331,6 +332,7 @@ contract DAO is Ownable2Step, ReentrancyGuard {
     /// @param newThreshold New minimum govToken balance (wei) required to create proposals.
     function setProposalThreshold(uint256 newThreshold) external {
         require(msg.sender == address(this), "OnlyDAO");
+        require(newThreshold > 0, "ZeroThreshold");
 
         uint256 oldProposalThreshold = proposalThreshold;
         proposalThreshold = newThreshold;

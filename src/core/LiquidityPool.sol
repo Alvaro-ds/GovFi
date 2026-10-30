@@ -24,7 +24,7 @@ contract LiquidityPool is ERC20, Ownable, ReentrancyGuard {
     address public immutable tokenB;
 
     /// @notice Address of the DAOTreasury that receives 20% of every swap fee.
-    address public treasury;
+    address public immutable treasury;
 
     /// @notice Address of the DAO; the only account allowed to change feeBps.
     address public dao;
@@ -73,11 +73,6 @@ contract LiquidityPool is ERC20, Ownable, ReentrancyGuard {
     /// @param oldFeeBps Previous fee in basis points.
     /// @param newFeeBps New fee in basis points.
     event FeeUpdated(uint256 oldFeeBps, uint256 newFeeBps);
-
-    /// @notice Emitted when the treasury address is updated.
-    /// @param oldTreasury Previous treasury address.
-    /// @param newTreasury New treasury address.
-    event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
 
     /// @notice Emitted when the DAO address is set for the first time.
     /// @param dao Address of the DAO contract.

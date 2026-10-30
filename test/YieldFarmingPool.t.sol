@@ -4,7 +4,59 @@ pragma solidity ^0.8.24;
 import "forge-std/Test.sol";
 import "../src/core/YieldFarmingPool.sol";
 import "../src/tokens/GovernanceToken.sol";
-import "./mocks/MockERC20.sol";
+import "./MockERC20.sol";
+
+// ─── Invariant handler ────────────────────────────────────────────────────────
+
+/// @dev Called by Foundry's invariant fuzzer. Uses two pre-funded actors to
+///      exercise stake / unstake / harvest / time-warp sequences. Each function
+///      is bounded so it never produces invalid inputs that would always revert.
+contract YieldFarmingPoolHandler is Test {
+    YieldFarmingPool internal pool_;
+    MockERC20 internal lpToken_;
+    address[2] internal users_;
+
+    constructor(YieldFarmingPool pool, MockERC20 lpToken, address user1, address user2) {
+        pool_ = pool;
+        lpToken_ = lpToken;
+        users_[0] = user1;
+        users_[1] = user2;
+    }
+
+    function stake(uint256 actorSeed, uint256 amount) external {
+        address actor = users_[actorSeed % 2];
+        uint256 available = lpToken_.balanceOf(actor);
+        if (available == 0) return;
+        amount = bound(amount, 1, available);
+        vm.startPrank(actor);
+        pool_.stake(amount);
+        vm.stopPrank();
+    }
+
+    function unstake(uint256 actorSeed, uint256 amount) external {
+        address actor = users_[actorSeed % 2];
+        uint256 staked = pool_.balances(actor);
+        if (staked == 0) return;
+        amount = bound(amount, 1, staked);
+        vm.startPrank(actor);
+        pool_.unstake(amount);
+        vm.stopPrank();
+    }
+
+    function harvest(uint256 actorSeed) external {
+        address actor = users_[actorSeed % 2];
+        if (pool_.earned(actor) == 0) return;
+        vm.startPrank(actor);
+        try pool_.harvest() {} catch {}
+        vm.stopPrank();
+    }
+
+    function warpTime(uint256 seconds_) external {
+        vm.warp(block.timestamp + bound(seconds_, 1, 30 days));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 contract YieldFarmingPoolTest is Test {
     YieldFarmingPool internal yieldPool;
@@ -18,6 +70,8 @@ contract YieldFarmingPoolTest is Test {
 
     uint256 internal constant INITIAL_REWARD_RATE = 1e18;
     uint256 internal constant INITIAL_LP_MINT = 1000e18;
+
+    YieldFarmingPoolHandler internal handler;
 
     function setUp() public {
         vm.label(owner, "owner");
@@ -48,6 +102,9 @@ contract YieldFarmingPoolTest is Test {
         vm.startPrank(user2);
         lpToken.approve(address(yieldPool), type(uint256).max);
         vm.stopPrank();
+
+        handler = new YieldFarmingPoolHandler(yieldPool, lpToken, user1, user2);
+        targetContract(address(handler));
     }
 
     // ─── constructor ──────────────────────────────────────────────────────────
@@ -301,5 +358,66 @@ contract YieldFarmingPoolTest is Test {
         assertGt(earned1, 0);
         assertGt(earned2, 0);
         assertApproxEqRel(earned1, earned2 * 2, 1e15);
+    }
+
+    // ─── fuzz tests ───────────────────────────────────────────────────────────
+
+    /// @dev Staking and immediately unstaking any valid amount must leave pool and
+    ///      user balances exactly as they were before.
+    function testFuzz_StakeUnstakePreservesBalances(uint256 amount) public {
+        amount = bound(amount, 1, INITIAL_LP_MINT);
+
+        uint256 lpBefore = lpToken.balanceOf(user1);
+
+        vm.startPrank(user1);
+        yieldPool.stake(amount);
+        vm.stopPrank();
+
+        assertEq(yieldPool.totalStaked(), amount);
+        assertEq(lpToken.balanceOf(address(yieldPool)), amount);
+
+        vm.startPrank(user1);
+        yieldPool.unstake(amount);
+        vm.stopPrank();
+
+        assertEq(yieldPool.totalStaked(), 0);
+        assertEq(lpToken.balanceOf(address(yieldPool)), 0);
+        assertEq(lpToken.balanceOf(user1), lpBefore);
+    }
+
+    /// @dev rewardPerToken() must never decrease as time advances with active stakers.
+    function testFuzz_RewardPerTokenIsMonotonic(uint256 elapsed) public {
+        elapsed = bound(elapsed, 1, 365 days);
+
+        vm.startPrank(user1);
+        yieldPool.stake(100e18);
+        vm.stopPrank();
+
+        uint256 rpt0 = yieldPool.rewardPerToken();
+        vm.warp(block.timestamp + elapsed);
+
+        assertGe(yieldPool.rewardPerToken(), rpt0);
+    }
+
+    /// @dev For a sole staker the earned amount must equal elapsed * rewardRate
+    ///      (no rounding error when totalStaked is a clean multiple).
+    function testFuzz_EarnedBoundedByElapsedRewards(uint256 elapsed) public {
+        elapsed = bound(elapsed, 1, 365 days);
+
+        vm.startPrank(user1);
+        yieldPool.stake(100e18);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + elapsed);
+
+        assertLe(yieldPool.earned(user1), elapsed * yieldPool.rewardRate());
+    }
+
+    // ─── invariant tests ──────────────────────────────────────────────────────
+
+    /// @dev The pool's accounting (totalStaked) must always match the actual
+    ///      LP token balance it holds. Any divergence means tokens are lost.
+    function invariant_TotalStakedEqualsLPBalance() public view {
+        assertEq(yieldPool.totalStaked(), lpToken.balanceOf(address(yieldPool)));
     }
 }

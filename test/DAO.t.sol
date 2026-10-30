@@ -495,6 +495,20 @@ contract DAOTest is Test {
         vm.stopPrank();
     }
 
+    function testSetQuorumBpsRevertsIfZero() public {
+        vm.startPrank(address(dao));
+        vm.expectRevert(bytes("ZeroQuorum"));
+        dao.setQuorumBps(0);
+        vm.stopPrank();
+    }
+
+    function testSetProposalThresholdRevertsIfZero() public {
+        vm.startPrank(address(dao));
+        vm.expectRevert(bytes("ZeroThreshold"));
+        dao.setProposalThreshold(0);
+        vm.stopPrank();
+    }
+
     function testSetVotingPeriodViaProposal() public {
         uint256 newPeriod = 172800;
         address[] memory targets = new address[](1);
@@ -539,5 +553,48 @@ contract DAOTest is Test {
         vm.stopPrank();
         assertTrue(ok);
         assertEq(address(dao).balance, 1 ether);
+    }
+
+    // ─── fuzz tests ───────────────────────────────────────────────────────────
+
+    /// @dev quorumVotes() must always equal totalSupply * quorumBps / 10000.
+    function testFuzz_QuorumVotesMathIsExact(uint256 bps) public {
+        bps = bound(bps, 1, 10000);
+
+        vm.startPrank(address(dao));
+        dao.setQuorumBps(bps);
+        vm.stopPrank();
+
+        uint256 expected = govToken.totalSupply() * bps / 10000;
+        assertEq(dao.quorumVotes(), expected);
+    }
+
+    /// @dev Any address holding fewer govTokens than the current threshold cannot propose.
+    function testFuzz_BelowThresholdAlwaysReverts(uint256 balance) public {
+        balance = bound(balance, 0, PROPOSAL_THRESHOLD - 1);
+
+        address testUser = vm.addr(99);
+        vm.label(testUser, "testUser");
+
+        if (balance > 0) {
+            vm.startPrank(owner);
+            govToken.mint(testUser, balance);
+            vm.stopPrank();
+            vm.startPrank(testUser);
+            govToken.delegate(testUser);
+            vm.stopPrank();
+            vm.roll(block.number + 1);
+        }
+
+        address[] memory targets = new address[](1);
+        targets[0] = address(dao);
+        uint256[] memory values = new uint256[](1);
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = abi.encodeWithSignature("setVotingPeriod(uint256)", 200000);
+
+        vm.startPrank(testUser);
+        vm.expectRevert("BelowProposalThreshold");
+        dao.propose(targets, values, calldatas, "Fuzz proposal");
+        vm.stopPrank();
     }
 }

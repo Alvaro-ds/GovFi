@@ -184,4 +184,47 @@ contract GovernanceTokenTest is Test {
     function testMaxSupply() public {
         assertEq(govToken.maxSupply(), MAX_SUPPLY);
     }
+
+    // ─── fuzz tests ───────────────────────────────────────────────────────────
+
+    /// @dev Any valid mint amount must not push totalSupply past the cap.
+    function testFuzz_MintRespectsCap(uint256 amount) public {
+        uint256 remaining = MAX_SUPPLY - govToken.totalSupply();
+        amount = bound(amount, 1, remaining);
+
+        vm.startPrank(minter);
+        govToken.mint(user, amount);
+        vm.stopPrank();
+
+        assertLe(govToken.totalSupply(), MAX_SUPPLY);
+    }
+
+    /// @dev Minting anything beyond the cap must revert with SupplyExceeded.
+    function testFuzz_MintExceedingCapReverts(uint256 excess) public {
+        excess = bound(excess, 1, MAX_SUPPLY);
+
+        vm.startPrank(minter);
+        govToken.mint(user, MAX_SUPPLY);
+        vm.expectRevert("SupplyExceeded");
+        govToken.mint(user, excess);
+        vm.stopPrank();
+    }
+
+    /// @dev Burning `burnAmount` tokens always reduces totalSupply by exactly that amount.
+    function testFuzz_BurnReducesSupplyExactly(uint256 mintAmount, uint256 burnAmount) public {
+        mintAmount = bound(mintAmount, 1, MAX_SUPPLY);
+        burnAmount = bound(burnAmount, 0, mintAmount);
+
+        vm.startPrank(minter);
+        govToken.mint(user, mintAmount);
+        vm.stopPrank();
+
+        uint256 supplyBefore = govToken.totalSupply();
+
+        vm.startPrank(user);
+        if (burnAmount > 0) govToken.burn(burnAmount);
+        vm.stopPrank();
+
+        assertEq(govToken.totalSupply(), supplyBefore - burnAmount);
+    }
 }

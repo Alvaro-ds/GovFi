@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
 import "../src/dao/DAOTreasury.sol";
-import "./mocks/MockERC20.sol";
+import "./MockERC20.sol";
 
 contract DAOTreasuryTest is Test {
     DAOTreasury internal treasury;

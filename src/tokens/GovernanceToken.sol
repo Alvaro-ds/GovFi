@@ -5,7 +5,6 @@ import "../../lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
 import "../../lib/openzeppelin-contracts/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "../../lib/openzeppelin-contracts/contracts/token/ERC20/extensions/ERC20Votes.sol";
 import "../../lib/openzeppelin-contracts/contracts/access/AccessControl.sol";
-import "../../lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 
 /**
  * @title GovernanceToken
@@ -14,7 +13,7 @@ import "../../lib/openzeppelin-contracts/contracts/access/Ownable.sol";
  *      ERC20Votes snapshots voting power per block, preventing flash-loan governance attacks.
  *      Holders must call delegate(address(self)) to activate their own voting weight.
  */
-contract GovernanceToken is ERC20, ERC20Permit, ERC20Votes, AccessControl, Ownable {
+contract GovernanceToken is ERC20, ERC20Permit, ERC20Votes, AccessControl {
     /// @notice Role identifier for the address authorized to mint new tokens.
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
 
@@ -39,9 +38,9 @@ contract GovernanceToken is ERC20, ERC20Permit, ERC20Votes, AccessControl, Ownab
      * @param cap          Absolute token supply cap. Must be greater than zero.
      * @param name         ERC20 token name.
      * @param symbol       ERC20 token symbol.
-     * @param initialOwner Address that receives ownership, DEFAULT_ADMIN_ROLE, and MINTER_ROLE.
+     * @param initialOwner Address that receives DEFAULT_ADMIN_ROLE and MINTER_ROLE.
      */
-    constructor(uint256 cap, string memory name, string memory symbol, address initialOwner) ERC20(name, symbol) ERC20Permit(name) Ownable(initialOwner) {
+    constructor(uint256 cap, string memory name, string memory symbol, address initialOwner) ERC20(name, symbol) ERC20Permit(name) {
         require(cap > 0, "ZeroMaxSupply");
         require(initialOwner != address(0), "ZeroAddress");
         maxSupply_ = cap;
